@@ -13,11 +13,13 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-import { getChangeElement, ElemID, Value, DetailedChange } from '@salto-io/adapter-api'
+import { getChangeElement, ElemID, Value, DetailedChange, TypeMap, isObjectType, ObjectType, isPrimitiveType, PrimitiveType, isField, Field, isInstanceElement, InstanceElement } from '@salto-io/adapter-api'
 import _ from 'lodash'
 import path from 'path'
-import { promises } from '@salto-io/lowerdash'
 import { resolvePath, filterByID } from '@salto-io/adapter-utils'
+import { ModificationDiff } from '@salto-io/dag'
+import { readFileSync } from 'fs'
+import { values, promises } from '@salto-io/lowerdash'
 import { ElementsSource } from '../../elements_source'
 import {
   projectChange, projectElementOrValueToEnv, createAddChange, createRemoveChange,
@@ -25,10 +27,117 @@ import {
 import { wrapAdditions, DetailedAddition } from '../addition_wrapper'
 import { NaclFilesSource, FILE_EXTENSION, RoutingMode } from '../nacl_files_source'
 
+const { isDefined } = values
+const { mapValuesAsync } = promises.object
 export interface RoutedChanges {
     primarySource?: DetailedChange[]
     commonSource?: DetailedChange[]
     secondarySources?: Record<string, DetailedChange[]>
+}
+
+const filterByIDRegex = async <T>(
+  id: ElemID, value: T,
+  filters: RegExp[],
+  rev = false
+): Promise<T | undefined> => {
+  const filterAnnotations = async (annotations: Value): Promise<Value> => (
+    filterByIDRegex(id.createNestedID('attr'), annotations, filters, rev)
+  )
+
+  const filterAnnotationType = async (annoTypes: TypeMap): Promise<TypeMap> => _.pickBy(
+    await mapValuesAsync(annoTypes, async (anno, annoName) => (
+      filterByIDRegex(
+        id.createNestedID('annotation').createNestedID(annoName),
+        anno,
+        filters,
+        rev
+      )
+    )),
+    anno => anno !== undefined
+  ) as TypeMap
+
+  if (_.some(filters.map(f => f.test(id.getFullName())))) {
+    return rev ? undefined : value
+  }
+  if (isObjectType(value)) {
+    const filteredFields = (await Promise.all(
+      Object.values(value.fields).map(field => filterByIDRegex(field.elemID, field, filters, rev))
+    )).filter(isDefined)
+    const fanno = await filterAnnotations(value.annotations)
+    const fannot = await filterAnnotationType(value.annotationTypes)
+    if (_.every([filteredFields, fanno, fannot], x => _.isEmpty(x))) {
+      return undefined
+    }
+    return new ObjectType({
+      elemID: value.elemID,
+      annotations: fanno,
+      annotationTypes: fannot,
+      fields: _.keyBy(filteredFields, field => field.name),
+      path: value.path,
+      isSettings: value.isSettings,
+    }) as Value as T
+  }
+  if (isPrimitiveType(value)) {
+    const fanno = await filterAnnotations(value.annotations)
+    const fannot = await filterAnnotationType(value.annotationTypes)
+    if (_.every([fanno, fannot], x => _.isEmpty(x))) {
+      return undefined
+    }
+    return new PrimitiveType({
+      elemID: value.elemID,
+      annotations: fanno,
+      annotationTypes: fannot,
+      primitive: value.primitive,
+      path: value.path,
+    }) as Value as T
+  }
+  if (isField(value)) {
+    const fanno = await filterByIDRegex(value.elemID, value.annotations, filters, rev)
+    if (_.every([fanno], x => _.isEmpty(x))) {
+      return undefined
+    }
+    return new Field(
+      value.parent,
+      value.name,
+      value.type,
+      fanno
+    ) as Value as T
+  }
+  if (isInstanceElement(value)) {
+    const fv = await filterByIDRegex(value.elemID, value.value, filters, rev)
+    const fanno = await filterByIDRegex(value.elemID, value.annotations, filters, rev)
+    if (_.every([fanno, fv], x => _.isEmpty(x))) {
+      return undefined
+    }
+    return new InstanceElement(
+      value.elemID.name,
+      value.type,
+      fv,
+      value.path,
+      fanno
+    ) as Value as T
+  }
+
+  if (_.isPlainObject(value)) {
+    const filteredObj = _.pickBy(
+      await mapValuesAsync(
+        value,
+        async (
+          val: Value,
+          key: string
+        ) => filterByIDRegex(id.createNestedID(key), val, filters, rev)
+      ),
+      val => val !== undefined
+    )
+    return _.isEmpty(filteredObj) ? undefined : filteredObj as Value as T
+  }
+  if (_.isArray(value)) {
+    const filteredArray = (await (Promise.all(value.map(
+      async (item, i) => filterByIDRegex(id.createNestedID(i.toString()), item, filters, rev)
+    )))).filter(item => item !== undefined)
+    return _.isEmpty(filteredArray) ? undefined : filteredArray as Value as T
+  }
+  return rev ? value : undefined
 }
 
 const filterByFile = async (
@@ -300,6 +409,80 @@ const toMergeableChanges = async (
   ]
 }
 
+// Returns: [envSpecific, restOfChanges]
+const seperateEnvSpecificChanges = async (
+  changes: DetailedChange[]
+): Promise<[DetailedChange[], DetailedChange[]]> => {
+  const rawDataFromFileOMGChangeThis = JSON.parse(readFileSync('./env_spec.json', 'utf8'))
+  const envSpecificPaths = rawDataFromFileOMGChangeThis
+    .envSpecificPaths
+    .map((s: string) => new RegExp(s))
+  const envSpecificIds = rawDataFromFileOMGChangeThis
+    .envSpecificIds
+    .map((s: string) => new RegExp(s))
+  const [specByPath, restOfChanges] = _.partition(
+    changes,
+    c => {
+      const pp = c.path || getChangeElement(c).path || []
+      return _.some(envSpecificPaths, p => p.test(pp))
+    }
+  )
+  const filteredEnvSpecific = (await Promise.all(restOfChanges.map(
+    async (c): Promise<DetailedChange> => {
+    // This is VERY UGLY but it works for now.
+      const cAsMod = c as ModificationDiff<Value>
+      return {
+        id: c.id,
+        path: c.path,
+        action: cAsMod.action,
+        data: {
+          after: await filterByIDRegex(
+            c.id,
+            cAsMod.data.after,
+            envSpecificIds
+          ),
+          before: await filterByIDRegex(
+            c.id,
+            cAsMod.data.before,
+            envSpecificIds
+          ),
+        },
+      }
+    }
+  ))).filter((c: Value) => c.data.after !== undefined || c.data.before !== undefined)
+
+  const filteredRestOfChanges = (await Promise.all(restOfChanges.map(
+    async (c): Promise<DetailedChange> => {
+      // This is VERY UGLY but it works for now.
+      const cAsMod = c as ModificationDiff<Value>
+      return {
+        id: c.id,
+        path: c.path,
+        action: cAsMod.action,
+        data: {
+          after: await filterByIDRegex(
+            c.id,
+            cAsMod.data.after,
+            envSpecificIds,
+            true
+          ),
+          before: await filterByIDRegex(
+            c.id,
+            cAsMod.data.before,
+            envSpecificIds,
+            true
+          ),
+        },
+      }
+    }
+  ))).filter((c: Value) => c.data.after !== undefined || c.data.before !== undefined)
+
+  return [
+    [...specByPath, ...filteredEnvSpecific],
+    filteredRestOfChanges,
+  ]
+}
+
 export const routeChanges = async (
   rawChanges: DetailedChange[],
   primarySource: NaclFilesSource,
@@ -308,9 +491,10 @@ export const routeChanges = async (
   mode?: RoutingMode
 ): Promise<RoutedChanges> => {
   const isIsolated = mode === 'isolated'
+  const [envSpecificChanges, restOfChanges] = await seperateEnvSpecificChanges(rawChanges)
   const changes = isIsolated
     ? await toMergeableChanges(rawChanges, primarySource, commonSource)
-    : rawChanges
+    : restOfChanges
   const routedChanges = await Promise.all(changes.map(c => (isIsolated
     ? routeNewEnv(c, primarySource, commonSource, secondarySources)
     : routeFetch(c, primarySource, commonSource, secondarySources))))
@@ -323,7 +507,11 @@ export const routeChanges = async (
   ) as Record<string, DetailedChange[]>
   return {
     primarySource: await createUpdateChanges(
-      _.flatten(routedChanges.map(r => r.primarySource || [])),
+      [
+        ...envSpecificChanges,
+        ..._.flatten(routedChanges.map(r => r.primarySource || [])),
+
+      ],
       commonSource,
       primarySource
     ),
