@@ -20,7 +20,8 @@ import initBuilder from './init'
 import servicesBuilder from './services'
 import envsBuilder from './env'
 import restoreBuilder from './restore'
-
+import moveToEnvBuilder from './moveToEnv'
+import moveToCommonBuilder from './moveToCommon'
 
 // The order of the builders determines order of appearance in help text
 export default [
@@ -30,4 +31,6 @@ export default [
   restoreBuilder,
   servicesBuilder,
   envsBuilder,
+  moveToEnvBuilder,
+  moveToCommonBuilder,
 ] as YargsCommandBuilder[]
