@@ -13,7 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-import { getChangeElement, ElemID, Value, DetailedChange, TypeMap, isObjectType, ObjectType, isPrimitiveType, PrimitiveType, isField, Field, isInstanceElement, InstanceElement } from '@salto-io/adapter-api'
+import { Element, getChangeElement, ElemID, Value, DetailedChange, TypeMap, isObjectType, ObjectType, isPrimitiveType, PrimitiveType, isField, Field, isInstanceElement, InstanceElement } from '@salto-io/adapter-api'
 import _ from 'lodash'
 import path from 'path'
 import { resolvePath, filterByID } from '@salto-io/adapter-utils'
@@ -26,6 +26,17 @@ import {
 } from './projections'
 import { wrapAdditions, DetailedAddition } from '../addition_wrapper'
 import { NaclFilesSource, FILE_EXTENSION, RoutingMode } from '../nacl_files_source'
+import { mergeAdditionElement, mergeAdditionWithTarget } from './addition_merger'
+import { mergeElements } from '../../../merger'
+// import { mergeAdditionWithTarget } from './addition_merger'
+
+const rawDataFromFileOMGChangeThis = JSON.parse(readFileSync('./env_spec.json', 'utf8'))
+const envSpecificPaths = rawDataFromFileOMGChangeThis
+  .envSpecificPaths
+  .map((s: string) => new RegExp(s))
+const envSpecificIds = rawDataFromFileOMGChangeThis
+  .envSpecificIds
+  .map((s: string) => new RegExp(s))
 
 const { isDefined } = values
 const { mapValuesAsync } = promises.object
@@ -35,7 +46,7 @@ export interface RoutedChanges {
     secondarySources?: Record<string, DetailedChange[]>
 }
 
-const filterByIDRegex = async <T>(
+export const filterByIDRegex = async <T>(
   id: ElemID, value: T,
   filters: RegExp[],
   rev = false
@@ -45,15 +56,15 @@ const filterByIDRegex = async <T>(
   )
 
   const filterAnnotationType = async (annoTypes: TypeMap): Promise<TypeMap> => _.pickBy(
-    await mapValuesAsync(annoTypes, async (anno, annoName) => (
-      filterByIDRegex(
-        id.createNestedID('annotation').createNestedID(annoName),
-        anno,
-        filters,
-        rev
-      )
-    )),
-    anno => anno !== undefined
+    annoTypes,
+    (_anno, annoName) => {
+      const annoID = id.createNestedID('annotation').createNestedID(annoName)
+      const pass = _.some(filters.map(f => f.test(annoID.getFullName())))
+      if (pass) {
+        return !rev
+      }
+      return rev
+    }
   ) as TypeMap
 
   if (_.some(filters.map(f => f.test(id.getFullName())))) {
@@ -413,13 +424,6 @@ const toMergeableChanges = async (
 const seperateEnvSpecificChanges = async (
   changes: DetailedChange[]
 ): Promise<[DetailedChange[], DetailedChange[]]> => {
-  const rawDataFromFileOMGChangeThis = JSON.parse(readFileSync('./env_spec.json', 'utf8'))
-  const envSpecificPaths = rawDataFromFileOMGChangeThis
-    .envSpecificPaths
-    .map((s: string) => new RegExp(s))
-  const envSpecificIds = rawDataFromFileOMGChangeThis
-    .envSpecificIds
-    .map((s: string) => new RegExp(s))
   const [specByPath, restOfChanges] = _.partition(
     changes,
     c => {
@@ -520,6 +524,221 @@ export const routeChanges = async (
       commonSource,
       commonSource
     ),
+    secondarySources: await promises.object.mapValuesAsync(
+      secondaryEnvsChanges,
+      (srcChanges, srcName) => createUpdateChanges(
+        srcChanges,
+        commonSource,
+        secondarySources[srcName]
+      )
+    ),
+  }
+}
+type UGLYP_PARAMS = {
+  before: Element[]
+  after: Element[]
+}
+export type UGLYP = (args: UGLYP_PARAMS) => Promise<DetailedChange[]>
+
+const mergeWithTargetElem = async (
+  changes: DetailedAddition[],
+  source: NaclFilesSource,
+  getPlan: UGLYP
+): Promise<DetailedChange[]> => {
+  const r = await Promise.all(_(changes)
+    .groupBy(c => c.id.createTopLevelParentID().parent.getFullName() + c.path)
+    .mapValues(async (elemChanges, _fullName) => {
+      const c = elemChanges[0]
+      // const elem = await source.get(ElemID.fromFullName(fullName)) as Element
+      const fullName = c.id.createTopLevelParentID().parent.getFullName()
+      const filename = `${(c.path || getChangeElement(c).path || []).join('/')}.nacl`
+      const elem = (await source.getElements(filename) || [])
+        .find(e => e.elemID.getFullName() === fullName)
+      if (!elem) return elemChanges
+      const [topLevelChange, restOfChanges] = _.partition(elemChanges, cc => cc.id.isTopLevel())
+      const merged = mergeElements([
+        ...topLevelChange.map(cc => cc.data.after),
+        elem,
+      ])
+      const mergedForReal = _.isEmpty(restOfChanges)
+        ? merged.merged[0]
+        : mergeAdditionElement(restOfChanges, merged.merged[0])
+      const newChanges = await getPlan({
+        before: [elem],
+        after: [mergedForReal],
+      })
+      return newChanges.map(cc => ({ ...cc, path: c.path }))
+    })
+    .values()
+    .value())
+  return _.flatten(r)
+}
+
+export const moveToEnv = async (
+  selectors: ElemID[],
+  primarySource: NaclFilesSource,
+  commonSource: NaclFilesSource,
+  secondarySources: Record<string, NaclFilesSource>,
+  getPlan: UGLYP
+): Promise<RoutedChanges> => {
+  const routedChanges = await Promise.all(
+    selectors.map(async (s): Promise<RoutedChanges> => {
+      const currentCommonElement = await commonSource.get(s)
+      const primChanges = _.flatten(await Promise.all((
+        await projectChange(createAddChange(currentCommonElement, s), primarySource)
+      ).map(projectedChange => seperateChangeByFiles(projectedChange, commonSource))))
+
+      const secChanges = _.fromPairs(
+        await Promise.all(
+          _.entries(secondarySources)
+            .map(async ([name, source]) => [
+              name,
+              _.flatten(
+                await Promise.all(
+                  (await projectChange(
+                    createAddChange(currentCommonElement, s), source
+                  )
+                  ).map(projectedChange => seperateChangeByFiles(projectedChange, commonSource))
+                )
+              ),
+            ])
+        )
+      )
+
+      return {
+        commonSource: [createRemoveChange(currentCommonElement, s)],
+        primarySource: primChanges,
+        secondarySources: secChanges,
+      }
+    })
+  )
+
+  const secondaryEnvsChanges = _.mergeWith(
+    {},
+    ...routedChanges.map(r => r.secondarySources || {}),
+    (objValue: DetailedChange[], srcValue: DetailedChange[]) => (
+      objValue ? [...objValue, ...srcValue] : srcValue
+    )
+  ) as Record<string, DetailedChange[]>
+
+  return {
+    primarySource: await mergeWithTargetElem(await createUpdateChanges(
+      _.flatten(routedChanges.map(r => r.primarySource || [])),
+      commonSource,
+      primarySource
+    ) as DetailedAddition[], primarySource, getPlan),
+    commonSource: await createUpdateChanges(
+      _.flatten(routedChanges.map(r => r.commonSource || [])),
+      commonSource,
+      commonSource
+    ),
+    secondarySources: await promises.object.mapValuesAsync(
+      secondaryEnvsChanges,
+      async (srcChanges, srcName) => mergeWithTargetElem(await createUpdateChanges(
+        srcChanges,
+        commonSource,
+        secondarySources[srcName]
+      ) as DetailedAddition[], secondarySources[srcName], getPlan)
+    ),
+  }
+}
+
+export const moveToCommon = async (
+  selectors: ElemID[],
+  primarySource: NaclFilesSource,
+  commonSource: NaclFilesSource,
+  secondarySources: Record<string, NaclFilesSource>,
+  getPlan: UGLYP
+): Promise<RoutedChanges> => {
+  const getSourceChange = async (
+    bid: ElemID,
+    valueToRemove: Value,
+    source: NaclFilesSource,
+    gp: UGLYP
+  ): Promise<DetailedChange[][]> => {
+    const topLevelID = bid.createTopLevelParentID().parent
+    const before = await source.get(topLevelID)
+    const rawChanges = await seperateChangeByFiles(createAddChange(valueToRemove, bid), source)
+    const [envSpecificChanges, commonChanges] = await seperateEnvSpecificChanges(rawChanges)
+    if (before === undefined) return [[], commonChanges]
+    const [topLevelChanges, restOfChanges] = _.partition(
+      envSpecificChanges,
+      cc => cc.id.isTopLevel()
+    )
+    const mergedBase = mergeElements(topLevelChanges.map(((c: Value) => c.data.after))).merged[0]
+    const after = restOfChanges.length > 0
+      ? (
+        mergeAdditionWithTarget(restOfChanges as DetailedAddition[], mergedBase).data as Value
+      ).after
+      : mergedBase
+    const sourceChanges = await gp({ before: [before], after: [after] })
+    return [sourceChanges, commonChanges]
+  }
+
+  const routedChanges = await Promise.all(
+    selectors.map(async (s): Promise<RoutedChanges> => {
+      const primaryCommonElement = await primarySource.get(s)
+      // const commonChangesAll = _.flatten(await Promise.all((
+      //   await projectChange(createAddChange(primaryCommonElement, s), commonSource)
+      // ).map(projectedChange => seperateChangeByFiles(projectedChange, primarySource))))
+      // const [commonChanges, needToBeModify] = await seperateEnvSpecificChanges(commonChangesAll)
+
+      const [primaryChanges, commonChanges] = await getSourceChange(
+        s,
+        primaryCommonElement,
+        primarySource,
+        getPlan
+      )
+
+      // For each change:
+      // Make an add change of needs to be modieid - then - same as in move to env!
+      const primChanges = _.flatten(
+        await Promise.all(primaryChanges.map(c => seperateChangeByFiles(c, primarySource)))
+      )
+      const secChanges = _.fromPairs(
+        await Promise.all(_.entries(secondarySources)
+          .map(async ([name, source]) => {
+            const [sourceChanges] = await getSourceChange(
+              s,
+              primaryCommonElement,
+              source,
+              getPlan
+            )
+            return [
+              name,
+              _.flatten(
+                await Promise.all(sourceChanges.map(c => seperateChangeByFiles(c, source)))
+              ),
+            ]
+          }))
+      )
+      return {
+        commonSource: commonChanges,
+        primarySource: primChanges,
+        secondarySources: secChanges,
+      }
+    })
+  )
+
+  const secondaryEnvsChanges = _.mergeWith(
+    {},
+    ...routedChanges.map(r => r.secondarySources || {}),
+    (objValue: DetailedChange[], srcValue: DetailedChange[]) => (
+      objValue ? [...objValue, ...srcValue] : srcValue
+    )
+  ) as Record<string, DetailedChange[]>
+
+  return {
+    primarySource: await createUpdateChanges(
+      _.flatten(routedChanges.map(r => r.primarySource || [])),
+      commonSource,
+      primarySource
+    ),
+    commonSource: await mergeWithTargetElem(await createUpdateChanges(
+      _.flatten(routedChanges.map(r => r.commonSource || [])),
+      commonSource,
+      commonSource
+    ) as DetailedAddition[], commonSource, getPlan),
     secondarySources: await promises.object.mapValuesAsync(
       secondaryEnvsChanges,
       (srcChanges, srcName) => createUpdateChanges(

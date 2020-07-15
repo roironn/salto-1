@@ -13,7 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-export { Plan, PlanItem } from './src/core/plan'
+export { Plan, PlanItem, getPlan } from './src/core/plan'
 export { FetchChange, FetchProgressEvents, StepEmitter } from './src/core/fetch'
 export * from './src/api'
 export { ItemStatus } from './src/core/deploy'

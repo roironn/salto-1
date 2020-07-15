@@ -54,6 +54,11 @@ export type NaclFile = {
   filename: string
   timestamp?: number
 }
+type UGLYP_PARAMS = {
+  before: Element[]
+  after: Element[]
+}
+export type UGLYP = (args: UGLYP_PARAMS) => Promise<DetailedChange[]>
 
 export type NaclFilesSource = ElementsSource & {
   updateNaclFiles: (changes: DetailedChange[], mode?: RoutingMode) => Promise<void>
@@ -69,6 +74,8 @@ export type NaclFilesSource = ElementsSource & {
   getErrors: () => Promise<Errors>
   getElements: (filename: string) => Promise<Element[]>
   clone: () => NaclFilesSource
+  moveToCommon?: (selectors: ElemID[], getPlan: UGLYP) => Promise<void>
+  moveToEnv?: (selectors: ElemID[], getPlan: UGLYP) => Promise<void>
 }
 
 export type ParsedNaclFile = {
@@ -331,7 +338,7 @@ const buildNaclFilesSource = (
     getNaclFile: filename => naclFilesStore.get(filename),
 
     getElements: async filename =>
-      Object.values((await getState()).parsedNaclFiles[filename]?.elements) || [],
+      Object.values((await getState()).parsedNaclFiles[filename]?.elements ?? {}) || [],
 
     getSourceRanges: async elemID => {
       const naclFiles = await getElementNaclFiles(elemID)

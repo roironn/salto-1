@@ -25,7 +25,7 @@ import { ValidationError } from '../../../validator'
 import { ParseError, SourceRange, SourceMap } from '../../../parser'
 
 import { mergeElements, MergeError } from '../../../merger'
-import { routeChanges } from './routers'
+import { routeChanges, moveToCommon, moveToEnv, UGLYP } from './routers'
 import { NaclFilesSource, NaclFile, RoutingMode } from '../nacl_files_source'
 import { Errors } from '../../errors'
 
@@ -251,6 +251,40 @@ const buildMultiEnvSource = (
       commonSourceName,
       state
     ),
+    moveToCommon: async (selectors: ElemID[], getPlan: UGLYP) => {
+      const routedChanges = await moveToCommon(
+        selectors,
+        primarySource(),
+        commonSource(),
+        secondarySources(),
+        getPlan
+      )
+      const secondaryChanges = routedChanges.secondarySources || {}
+      await Promise.all([
+        primarySource().updateNaclFiles(routedChanges.primarySource || []),
+        commonSource().updateNaclFiles(routedChanges.commonSource || []),
+        ..._.keys(secondaryChanges)
+          .map(srcName => secondarySources()[srcName].updateNaclFiles(secondaryChanges[srcName])),
+      ])
+      state = buildMutiEnvState()
+    },
+    moveToEnv: async (selectors: ElemID[], getPlan: UGLYP) => {
+      const routedChanges = await moveToEnv(
+        selectors,
+        primarySource(),
+        commonSource(),
+        secondarySources(),
+        getPlan
+      )
+      const secondaryChanges = routedChanges.secondarySources || {}
+      await Promise.all([
+        primarySource().updateNaclFiles(routedChanges.primarySource || []),
+        commonSource().updateNaclFiles(routedChanges.commonSource || []),
+        ..._.keys(secondaryChanges)
+          .map(srcName => secondarySources()[srcName].updateNaclFiles(secondaryChanges[srcName])),
+      ])
+      state = buildMutiEnvState()
+    },
   }
 }
 

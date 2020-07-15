@@ -33,6 +33,7 @@ import {
   addHiddenValuesAndHiddenTypes,
 } from './hidden_values'
 import { WorkspaceConfigSource } from './workspace_config_source'
+import { UGLYP } from './nacl_files/mutil_env/routers'
 
 const log = logger(module)
 
@@ -100,6 +101,8 @@ export type Workspace = {
   updateServiceConfig: (service: string, newConfig: Readonly<InstanceElement>) => Promise<void>
 
   getStateRecency(services: string): Promise<StateRecency>
+  moveToCommon?: (selectors: ElemID[], getPlan: UGLYP) => Promise<void>
+  moveToEnv?: (selectors: ElemID[], getPlan: UGLYP) => Promise<void>
 }
 
 // common source has no state
@@ -342,6 +345,10 @@ export const loadWorkspace = async (config: WorkspaceConfigSource, credentials: 
       })()
       return { serviceName, status, date }
     },
+    moveToCommon: async (selectors: ElemID[], getPlan: UGLYP) => naclFilesSource.moveToCommon
+      && naclFilesSource.moveToCommon(selectors, getPlan),
+    moveToEnv: async (selectors: ElemID[], getPlan: UGLYP) => naclFilesSource.moveToEnv
+      && naclFilesSource.moveToEnv(selectors, getPlan),
   }
 }
 

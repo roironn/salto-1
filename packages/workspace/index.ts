@@ -30,6 +30,7 @@ import * as merger from './src/merger'
 import * as expressions from './src/expressions'
 import * as serialization from './src/serializer/elements'
 import * as pathIndex from './src/workspace/path_index'
+import { moveToCommon, moveToEnv } from './src/workspace/nacl_files/mutil_env/routers'
 
 export {
   errors,
@@ -55,4 +56,6 @@ export {
   initWorkspace,
   state,
   workspaceConfigSource,
+  moveToEnv,
+  moveToCommon,
 }
