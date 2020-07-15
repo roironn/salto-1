@@ -30,13 +30,6 @@ import { mergeAdditionElement, mergeAdditionWithTarget } from './addition_merger
 import { mergeElements } from '../../../merger'
 // import { mergeAdditionWithTarget } from './addition_merger'
 
-const rawDataFromFileOMGChangeThis = JSON.parse(readFileSync('./env_spec.json', 'utf8'))
-const envSpecificPaths = rawDataFromFileOMGChangeThis
-  .envSpecificPaths
-  .map((s: string) => new RegExp(s))
-const envSpecificIds = rawDataFromFileOMGChangeThis
-  .envSpecificIds
-  .map((s: string) => new RegExp(s))
 
 const { isDefined } = values
 const { mapValuesAsync } = promises.object
@@ -424,6 +417,13 @@ const toMergeableChanges = async (
 const seperateEnvSpecificChanges = async (
   changes: DetailedChange[]
 ): Promise<[DetailedChange[], DetailedChange[]]> => {
+  const rawDataFromFileOMGChangeThis = JSON.parse(readFileSync('./env_spec.json', 'utf8'))
+  const envSpecificPaths = rawDataFromFileOMGChangeThis
+    .envSpecificPaths
+    .map((s: string) => new RegExp(s))
+  const envSpecificIds = rawDataFromFileOMGChangeThis
+    .envSpecificIds
+    .map((s: string) => new RegExp(s))
   const [specByPath, restOfChanges] = _.partition(
     changes,
     c => {
