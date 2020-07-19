@@ -268,7 +268,7 @@ export const routeFetch = async (
   change: DetailedChange,
   primarySource: NaclFilesSource,
   commonSource: NaclFilesSource,
-  secondarySources: Record<string, NaclFilesSource>
+  _secondarySources: Record<string, NaclFilesSource>
 ): Promise<RoutedChanges> => {
   // If the add change projects to a secondary source we can't
   // add it to common since it is already marked as env specific.
