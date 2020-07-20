@@ -18,7 +18,6 @@ import _ from 'lodash'
 import path from 'path'
 import { resolvePath, filterByID } from '@salto-io/adapter-utils'
 import { ModificationDiff } from '@salto-io/dag'
-import { readFileSync } from 'fs'
 import { values, promises } from '@salto-io/lowerdash'
 import { ElementsSource } from '../../elements_source'
 import {
@@ -418,7 +417,8 @@ const toMergeableChanges = async (
 const seperateEnvSpecificChanges = async (
   changes: DetailedChange[]
 ): Promise<[DetailedChange[], DetailedChange[]]> => {
-  const rawDataFromFileOMGChangeThis = JSON.parse(readFileSync('./env_spec.json', 'utf8'))
+  const rawDataFromFileOMGChangeThis = { envSpecificPaths: [], envSpecificIds: [] }
+  // JSON.parse(readFileSync('./env_spec.json', 'utf8'))
   const envSpecificPaths = rawDataFromFileOMGChangeThis
     .envSpecificPaths
     .map((s: string) => new RegExp(s))
@@ -672,7 +672,10 @@ export const moveToCommon = async (
         mergeAdditionWithTarget(restOfChanges as DetailedAddition[], mergedBase).data as Value
       ).after
       : mergedBase
-    const sourceChanges = await gp({ before: [before], after: [after] })
+    const sourceChanges = await gp({
+      before: before === undefined ? [] : [before],
+      after: after === undefined ? [] : [after],
+    })
     return [sourceChanges, commonChanges]
   }
 
