@@ -647,6 +647,75 @@ export const moveToCommon = async (
   secondarySources: Record<string, NaclFilesSource>,
   getPlan: UGLYP
 ): Promise<RoutedChanges> => {
+  const routedChanges = await Promise.all(
+    selectors.map(async (s): Promise<RoutedChanges> => {
+      const currentPrimaryElement = await primarySource.get(s)
+      const commonChanges = _.flatten(await Promise.all((
+        await projectChange(createAddChange(currentPrimaryElement, s), commonSource)
+      ).map(projectedChange => seperateChangeByFiles(projectedChange, primarySource))))
+
+      const secChanges = _.fromPairs(
+        await Promise.all(
+          _.entries(secondarySources)
+            .map(async ([name, source]) => [
+              name,
+              _.flatten(
+                await Promise.all(
+                  (await projectChange(
+                    createRemoveChange(currentPrimaryElement, s), source
+                  )
+                  ).map(projectedChange => seperateChangeByFiles(projectedChange, primarySource))
+                )
+              ),
+            ])
+        )
+      )
+
+      return {
+        commonSource: commonChanges,
+        primarySource: [createRemoveChange(currentPrimaryElement, s)],
+        secondarySources: secChanges,
+      }
+    })
+  )
+
+  const secondaryEnvsChanges = _.mergeWith(
+    {},
+    ...routedChanges.map(r => r.secondarySources || {}),
+    (objValue: DetailedChange[], srcValue: DetailedChange[]) => (
+      objValue ? [...objValue, ...srcValue] : srcValue
+    )
+  ) as Record<string, DetailedChange[]>
+
+  return {
+    primarySource: await createUpdateChanges(
+      _.flatten(routedChanges.map(r => r.primarySource || [])),
+      commonSource,
+      primarySource
+    ),
+    commonSource: await mergeWithTargetElem(await createUpdateChanges(
+      _.flatten(routedChanges.map(r => r.commonSource || [])),
+      commonSource,
+      commonSource
+    ) as DetailedAddition[], commonSource, getPlan),
+    secondarySources: await promises.object.mapValuesAsync(
+      secondaryEnvsChanges,
+      async (srcChanges, srcName) => createUpdateChanges(
+        srcChanges,
+        commonSource,
+        secondarySources[srcName]
+      )
+    ),
+  }
+}
+
+export const moveToCommon2 = async (
+  selectors: ElemID[],
+  primarySource: NaclFilesSource,
+  commonSource: NaclFilesSource,
+  secondarySources: Record<string, NaclFilesSource>,
+  getPlan: UGLYP
+): Promise<RoutedChanges> => {
   const getSourceChange = async (
     bid: ElemID,
     valueToRemove: Value,
