@@ -496,10 +496,10 @@ export const routeChanges = async (
   mode?: RoutingMode
 ): Promise<RoutedChanges> => {
   const isIsolated = mode === 'isolated'
-  const [envSpecificChanges, restOfChanges] = await seperateEnvSpecificChanges(rawChanges)
+  // const [envSpecificChanges, restOfChanges] = await seperateEnvSpecificChanges(rawChanges)
   const changes = isIsolated
     ? await toMergeableChanges(rawChanges, primarySource, commonSource)
-    : restOfChanges
+    : rawChanges
   const routedChanges = await Promise.all(changes.map(c => (isIsolated
     ? routeNewEnv(c, primarySource, commonSource, secondarySources)
     : routeFetch(c, primarySource, commonSource, secondarySources))))
@@ -512,11 +512,7 @@ export const routeChanges = async (
   ) as Record<string, DetailedChange[]>
   return {
     primarySource: await createUpdateChanges(
-      [
-        ...envSpecificChanges,
-        ..._.flatten(routedChanges.map(r => r.primarySource || [])),
-
-      ],
+      _.flatten(routedChanges.map(r => r.primarySource || [])),
       commonSource,
       primarySource
     ),
