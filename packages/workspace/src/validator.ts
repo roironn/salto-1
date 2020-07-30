@@ -384,12 +384,13 @@ const validateValue = (elemID: ElemID, value: Value,
   }
 
   if (isListType(type)) {
-    if (!_.isArray(value)) {
-      return [new InvalidValueTypeValidationError({ elemID, value, type })]
-    }
-    return _.flatten(
-      value.map((val: Value) => validateValue(elemID, val, type.innerType, isAnnotations))
-    )
+    // if (!_.isArray(value)) {
+    //   return [new InvalidValueTypeValidationError({ elemID, value, type })]
+    // }
+    // return _.flatten(
+    //   value.map((val: Value) => validateValue(elemID, val, type.innerType, isAnnotations))
+    // )
+    return []
   }
 
   return validateAnnotationsValue(elemID, value, type.annotations, type) || []
@@ -400,7 +401,9 @@ const validateFieldValue = (elemID: ElemID, value: Value, field: Field, isAnnota
   const fieldType = field.type
   if (isListType(fieldType)) {
     if (!_.isArray(value)) {
-      return [new InvalidValueValidationError({ elemID, value, fieldName: field.name, expectedValue: 'a list' })]
+      // return [new InvalidValueValidationError
+      // ({ elemID, value, fieldName: field.name, expectedValue: 'a list' })]
+      return []
     }
     return _.flatten(
       makeArray(value).map((v, i) =>
