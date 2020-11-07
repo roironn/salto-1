@@ -26,6 +26,8 @@ export interface SaltoElemLocation {
   range: EditorRange
 }
 
+export type SaltoElemFileLocation = Omit<SaltoElemLocation, 'range'>
+
 const MAX_LOCATION_SEARCH_RESULT = 20
 
 const getAllElements = async (workspace: EditorWorkspace):
@@ -76,8 +78,10 @@ export const getQueryLocations = async (
 export const getQueryLocationsFuzzy = async (
   workspace: EditorWorkspace,
   query: string,
-): Promise<Fuse.FuseResult<SaltoElemLocation>[]> => {
+): Promise<Fuse.FuseResult<SaltoElemFileLocation>[]> => {
+  console.log('test', query)
   const elements = await getAllElements(workspace)
+  console.log(elements.map(e => e.elemID.getFullName()))
   const fuse = new Fuse(elements.map(e => e.elemID.getFullName()), { includeMatches: true })
   const fuseSearchResult = fuse.search(query)
   const topFuzzyResults = fuseSearchResult
@@ -86,8 +90,10 @@ export const getQueryLocationsFuzzy = async (
   if (topFuzzyResults.length > 0) {
     const locationsRes = await Promise.all(topFuzzyResults
       .map(async res => {
-        const locations = await getLocations(workspace, res.item)
-        return locations.map(location => ({ ...res, item: location }))
+        const fullname = res.item
+        console.log(res)
+        const resFiles = await workspace.getElementNaclFiles(ElemID.fromFullName(res.item))
+        return resFiles.map(filename => ({ ...res, item: { fullname, filename} }))
       }))
     return _.flatten(locationsRes)
   }
