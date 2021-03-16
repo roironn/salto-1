@@ -99,6 +99,12 @@ const configID = new ElemID(NETSUITE)
 export const configType = new ObjectType({
   elemID: configID,
   fields: {
+    [TYPES_TO_SKIP]: {
+      refType: createRefToElmWithValue(new ListType(BuiltinTypes.STRING)),
+    },
+    [FILE_PATHS_REGEX_SKIP_LIST]: {
+      refType: createRefToElmWithValue(new ListType(BuiltinTypes.STRING)),
+    },
     [DEPLOY_REFERENCED_ELEMENTS]: {
       refType: createRefToElmWithValue(BuiltinTypes.BOOLEAN),
       annotations: {
